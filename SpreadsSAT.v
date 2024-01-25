@@ -72,6 +72,8 @@ Fixpoint belongs {A:Set} (eqb:A->A->bool) (p:A) (l:list A) :=
   | x::xs => ((eqb p x) || (belongs eqb p xs))%bool
   end.
 
+Definition incl {A:Set} eqb (l1:list A) (l2:list A) := forallb (fun x=> belongs eqb x l2) l1.
+
 Definition belongs_nat := belongs nat_eq.
 Definition belongs_listnat := belongs listnat_eq.
 
@@ -417,12 +419,12 @@ Check point_lines.
 Eval compute in point_lines 1 lines.
 
 Definition inth_l {A:Set} (l:list (list A)) i := nth i l [].
-
+Open Scope bool_scope.
 Definition is_spread s :=  
   ((forallb (fun t => belongs nat_eq t (upto (length lines))) s) 
              && sorted nat_le s
              && distinct nat_eq s
-             && is_partition (map (fun i => (inth_l lines i)) s))%bool. 
+             && is_partition (map (fun i => (inth_l lines i)) s)).
 
 Eval compute in is_spread [0; 19; 24; 28; 33].
 (*
@@ -543,8 +545,13 @@ lemma set_val_to_spread_subset [simp]:
   unfolding val_to_spread_def
   by auto
 *)
-Lemma val_to_spread_spread_to_val: forall eq le s, distinct eq s -> sorted le s -> incl s (upto (length lines)) -> val_to_spread (spread_to_val s) = s.
+Lemma val_to_spread_spread_to_val: forall eq le s, distinct eq s -> sorted le s -> incl eq s (upto (length lines)) -> val_to_spread (spread_to_val s) = s.
 Proof.
+  intros.
+  assert (Hs:sorted nat_le (val_to_spread (spread_to_val s))).
+  apply sorted_val_to_spread. 
+  assert (Hd : distinct nat_eq (val_to_spread (spread_to_val s))).
+  apply distinct_val_to_spread. 
 Admitted.
 
 (*proof (rule sorted_distinct_set_unique)
@@ -662,6 +669,8 @@ lemma models_spread:
 Lemma spread_model: forall s, is_spread s -> satisfies_formula (spread_to_val s) spreadsSAT.
 Proof.
   unfold satisfies_formula.
+  intros.
+
 Admitted.
 (*proof
   fix p
@@ -786,18 +795,39 @@ Admitted.
     using \<open>s \<in> set spreads\<close>
     by simp
 qed
-*) 
+ *)
+
+Lemma foo : forall  A B : Prop, (A -> B) -> (~B->~A).
+Proof.
+solve [intuition].
+Qed.
+
+Lemma andb_istrue : forall a b, is_true (andb a b) <-> (is_true a/\ is_true b).
+Proof.
+  intros; destruct a; destruct b; split; zchaff.
+Qed.
+
+Lemma bool_not_not : forall b:bool, ~~b<->b.
+Proof.
+  zchaff.
+Qed.
+
 Lemma not_in_spreadsSAT': forall s, is_spread s -> ~In s spreads -> satisfies_formula (spread_to_val s) not_in_spreadsSAT.
 Proof.
+  unfold is_spread.
   intros.
-Admitted.
-(*  unfold not_in_spreadsSAT, satisfies_formula, satisfies_clause, satisfies_lit.
-  intros.
-Check val_to_spread_spread_to_val.
-*)
+  repeat rewrite andb_istrue in H; destruct H as [[[Hf Hs] Hd] Hp].
   
-(*using assms
-  by (metis is_spread_def not_in_spreadsSAT val_to_spread_spread_to_val)*)
+  simpl upto in Hf.
+  rewrite <- val_to_spread_spread_to_val with (eq:=nat_eq) (le:=nat_le) (s:=s) in H0.
+
+  generalize (foo _ _ (not_in_spreadsSAT_characterization (spread_to_val s)) H0).
+  apply bool_not_not.
+  assumption.
+  assumption.
+  simpl.
+  assumption.
+Qed.
 
 Lemma satisfies_formula_app :
   forall val l1 l2, satisfies_formula val (l1++l2) = (satisfies_formula val l1 && satisfies_formula val l2)%bool.
