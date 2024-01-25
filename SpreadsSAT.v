@@ -2,11 +2,16 @@ Require Import Arith.
 Require Import List.
 Import ListNotations.
 
-Definition point:=nat.
-Definition line := list point.
+Require Import ZArith.
 
-Definition lines : list line := [[0; 1; 2];
-          [0; 3; 4];
+From SMTCoq Require Import SMTCoq.
+
+Definition point := nat.
+Definition line  := list point.
+                        
+Definition lines : list line :=
+         [[0; 1; 2];
+         [0; 3; 4];
          [0; 5; 6];
          [0; 7; 8];
          [0; 10; 9];
@@ -41,23 +46,58 @@ Definition lines : list line := [[0; 1; 2];
          [6; 9; 12];
          [6; 10; 11]].
 
-(*lemma distinct_lines:
-  shows "distinct (map set lines)"
-  by eval
- *)
+Definition nat_eq := Nat.eqb.
+Definition nat_le := Nat.leb.
 
-Fixpoint insert t s :=
+Fixpoint listnat_eq l1 l2 :=
+  match (l1,l2) with
+    ([],[]) => true
+  | ([], _::_) => false
+  | (_::_,[]) => false
+  | (x::xs, y::ys) => (Nat.eqb x y && listnat_eq xs ys)%bool
+  end.
+
+(* assuming both lists have the same size *)
+Fixpoint listnat_le l1 l2 :=
+  match (l1,l2) with
+    ([],[]) => true
+  | ([], _::_) => true
+  | (_::_,[]) => false
+  | (x::xs, y::ys) => (Nat.leb x y && listnat_le xs ys)%bool
+  end.
+
+Fixpoint belongs {A:Set} (eqb:A->A->bool) (p:A) (l:list A) :=
+  match l with
+    [] => false
+  | x::xs => ((eqb p x) || (belongs eqb p xs))%bool
+  end.
+
+Definition belongs_nat := belongs nat_eq.
+Definition belongs_listnat := belongs listnat_eq.
+
+Fixpoint distinct {A:Set} (eqb:A->A->bool) l :=
+  match l with
+    [] => true
+  | x::xs => if (belongs eqb x xs) then false else distinct eqb xs end.
+
+
+Lemma distinct_lines: distinct listnat_eq lines.
+Proof.
+  reflexivity.
+Qed.
+
+Fixpoint insert {A:Set} (leb:A->A->bool) t s :=
   match s with
   | [] => [t]
-  | x::xs => if le_dec t x then t::(x::xs) else x::(insert t xs)
+  | x::xs => if leb t x then t::(x::xs) else x::(insert leb t xs)
   end.
 (*
 Functional Scheme insert_ind := Induction for insert Sort Prop.*)
 
-Fixpoint sort s :=
+Fixpoint sort {A:Set} (leb:A->A->bool) s :=
   match s with
   | [] => []
-  | x::xs => insert x (sort xs)
+  | x::xs => insert leb x (sort leb xs)
   end.
 
 Fixpoint remdups {A:Set}(dec:forall x y : A, {x = y} + {x <> y}) l :=
@@ -66,7 +106,7 @@ Fixpoint remdups {A:Set}(dec:forall x y : A, {x = y} + {x <> y}) l :=
   | x::xs => if (@in_dec A dec x xs) then remdups dec xs else x::remdups dec xs
   end.
 
-Definition all_points := remdups eq_nat_dec (sort (concat lines)).
+Definition all_points := remdups eq_nat_dec (sort nat_le (concat lines)).
 Eval compute in all_points.
 
 Fixpoint upto (n:nat) :=
@@ -87,30 +127,26 @@ Proof.
 Qed.
 
 Definition line_index := nat.
-Check combine.
-Definition zip  {S T:Set} (s : list S) (t : list T) := combine s t.
-(*Fixpoint zip {S T:Set} (s : list S) (t : list T) {struct t} :=
-  match s, t with
-  | x :: s', y :: t' => (x, y) :: zip s' t'
-  | _, _ => []
-  end.
-*)
-Definition belongs (p:nat) (l:list nat) :=
-  match in_dec eq_nat_dec p l with left _ => true | right _ => false end.
 
 (* Indices of lines that contain the given point *)
 Definition point_lines (p: point) (ls:list line) : list line_index := 
-   map fst (filter (fun  x  => match x with (i, l) => belongs p l end) (zip (upto (length ls)) ls)).
+   map fst (filter (fun  x  => match x with (i, l) => belongs nat_eq p l end) (combine (upto (length ls)) ls)).
 
 Eval compute in point_lines 0 lines.
+Eval compute in distinct nat_eq (point_lines 0 lines).
 
-(*lemma distinct_point_lines:
-  shows "distinct (point_lines p lines)"
-  unfolding point_lines_def
-  by (simp add: distinct_map_filter)
- *)
+Lemma distinct_point_lines : forall p, belongs nat_eq p all_points = true -> distinct nat_eq (point_lines p lines)=true.
+Proof.
+  intros p.
+  unfold all_points; simpl.
+  repeat rewrite Bool.orb_true_iff; repeat rewrite Nat.eqb_eq; intuition; subst.
+  par:(unfold all_points, point_lines, lines; reflexivity).
+Qed.
 
-(*
+(*Lemma set_points_lines : forall p, (point_lines p ls) = {i. i < length ls \<and> p \<in> set (ls ! i)
+                                                                                     Proof.*)
+
+                                                   (*
 lemma set_point_lines:
   shows "set (point_lines p ls) = {i. i < length ls \<and> p \<in> set (ls ! i)}"
 proof safe
@@ -164,8 +200,7 @@ next
     by force
 qed
  *)
-Require Import ZArith.
-Open Scope Z_scope.
+
 
 Definition satisfies_lit (val: nat -> bool) (lit:Z) : bool :=
   (if Z_gt_le_dec lit 0 then val (Z.to_nat lit) else negb (val (Z.to_nat (-lit)%Z))).
@@ -175,17 +210,12 @@ Definition satisfies_clause (val : nat -> bool) (cl:list Z) : bool :=
 
 Definition satisfies_formula (val : nat -> bool) (fmt: list (list Z)) : bool :=
   forallb (fun cl => satisfies_clause val cl) fmt.
-Check Z.of_nat.
 
 Definition exactly1 (ls: list nat) : list (list Z) := 
-  (map Z.of_nat ls) :: map (fun x => match x with (i,j) => [-(Z.of_nat i); -(Z.of_nat j)] end) (all_pairs ls).
-Eval compute in (exactly1 [1;2;3;4])%nat.
-Check forallb.
-Require Bool.
-Search ({_=_}+{_=_})%bool.
+  (map Z.of_nat ls) :: map (fun x => match x with (i,j) => [-(Z.of_nat i); -(Z.of_nat j)] end)%Z (all_pairs ls).
+Eval compute in (exactly1 [1;2;3;4]).
 
 Definition eqb (x y:bool) := match (x,y) with (true, true) | (false, false) => true | _ => false end.
-
 
 Definition exactly1_val val vs :=
 existsb (fun v => (eqb (val v) true) && (forallb (fun v' => negb (eqb v' v) && (eqb (val v') false)) vs))%bool vs.
@@ -271,11 +301,11 @@ Fixpoint map1 {A B:Set} (f:A->B) (l:list A) : list B :=
   | x::xs => (f x)::map1 f xs
   end.
 
-Definition spreadsSAT := concat (map1 (fun  p => exactly1 (map L (point_lines p lines))) all_points).
+Definition spreadsSAT := concat (map1 (fun p => exactly1 (map L (point_lines p lines))) all_points).
 
 Eval compute in spreadsSAT.
-(*
-lemma spreadsSAT_nonzero:
+
+(*Lemma spreadsSAT_nonzero: forall clause, In clause spreadsSAT, 
   shows "\<forall> clause \<in> set spreadsSAT. 0 \<notin> set clause"
   unfolding spreadsSAT_def
   by (auto simp add: exactly1_def set_all_pairs L_def)
@@ -306,27 +336,20 @@ proof-
     by auto
 qed
  *)
-Locate implb.
-Locate list.
-Check belongs.
-Fixpoint intersect (l1 l2:list nat) :=
+
+Fixpoint intersect {A:Set} (eqb:A -> A -> bool) (l1 l2:list A) :=
   match l1 with
     [] => []
-  | x::xs => if (belongs x l2) then x::intersect xs l2 else intersect xs l2 
+  | x::xs => if (belongs eqb x l2) then x::intersect eqb xs l2 else intersect eqb xs l2 
   end.
 
 Definition is_empty {A:Set} (l:list A ) : bool := match l with [] => true | _ => false end.
 
-Print existsb.
-Search intersect.
-Search intersect.
-Search list.
-Print intersect.
-Search (_=_)%nat.
+Definition is_partition (s : list (list point)) : bool := 
+  ((forallb (fun p => (existsb (fun q => belongs nat_eq p q) s)) all_points) &&
+  forallb (fun l1 => forallb (fun l2 => (implb (negb (listnat_eq l1 l2)) (is_empty (intersect nat_eq l1 l2)))) s) s)%bool. 
 
-Definition is_partition s : bool := 
-  (forallb (fun p => (existsb (fun q => belongs p q) s)) all_points). (*&&
-  forallb (fun l1 => forallb (fun l2 => (implb (negb (Nat.eqb l1 l2)) (is_empty (intersect l1 l2)))) s) s.*)
+Eval compute in is_partition ([[0;1;2;3;4];[6;7;8;9;10];[11];[12;13;5;14]]).
 
 (*Definition is_partition :: "(point set) list -> bool" where
   "is_partition s \<longleftrightarrow> 
@@ -382,23 +405,26 @@ next
 qed
 *)
 
-Fixpoint sorted s :=
+Fixpoint sorted {A:Set} (leb:A->A->bool) s :=
   match s with
   | [] => true
   | x::[] => true
-  | x::(y::xs) as z => (leb x y && (sorted (z)))%bool
+  | x::(y::xs) as z => (leb x y && (sorted leb z))%bool
   end.
-Fixpoint distinct l :=
-  match l with
-    [] => true
-  | x::xs => if (belongs x xs) then false else distinct xs end.
-(*
+Check is_partition.
+Check point_lines.
+
+Eval compute in point_lines 1 lines.
+
+Definition inth_l {A:Set} (l:list (list A)) i := nth i l [].
+
 Definition is_spread s :=  
-  ((forallb (fun t => belongs t (upto (length lines))) s) 
-             && sorted s
-             && distinct s
-             && is_partition (map (fun i => set (lines ! i)) s). 
-*)
+  ((forallb (fun t => belongs nat_eq t (upto (length lines))) s) 
+             && sorted nat_le s
+             && distinct nat_eq s
+             && is_partition (map (fun i => (inth_l lines i)) s))%bool. 
+
+Eval compute in is_spread [0; 19; 24; 28; 33].
 (*
 lemma inj_set_lines:
   assumes "set s \<subseteq> {0..<length lines}"
@@ -458,25 +484,56 @@ next
     unfolding is_spread_def
     by (metis length_map nth_map)
 qed
+*)
+Definition spread_to_val s := 
+  fun v => existsb (fun l => belongs nat_eq l s && nat_eq (L l) v)%bool s.
 
-definition spread_to_val where
-  "spread_to_val s = (\<lambda> v. \<exists> l \<in> set s. L l = v)"
+Definition val_to_spread val := filter (fun i => val (L i)) (upto (length lines)).
 
-definition val_to_spread where
-  "val_to_spread val = filter (\<lambda> i. val (L i)) [0..<length lines]"
 
-lemma distinct_val_to_spread [simp]:
-  shows "distinct (val_to_spread val)"
-  unfolding val_to_spread_def
-  by simp
+Lemma distinct_cons : forall (A:Set) (l:list A) eq a, distinct eq (a::l) -> distinct eq l. 
+Proof.
+Admitted.
 
-lemma sorted_val_to_spread [simp]:
-  shows "sorted (val_to_spread val)"
-  unfolding val_to_spread_def
-  using sorted_upt sorted_wrt_filter
-  by blast
+Lemma distinct_filter : forall (A:Set) (l:list A) eq f , distinct eq l -> distinct eq (filter f l).
+Proof.
+Admitted.  
+  
+Lemma distinct_val_to_spread : forall val, distinct nat_eq (val_to_spread val).
+Proof.
+  intros.
+  unfold val_to_spread. simpl upto.
+  apply distinct_filter.
+  reflexivity.
+Qed.
 
-lemma set_val_to_spread:
+Lemma sorted_inv : forall {A:Set} le a (l:list A), sorted le (a::l) -> sorted le l.
+Proof.
+Admitted.
+
+Lemma sorted_filter : forall (A:Set) (l:list A) le f , sorted le l -> sorted le (filter f l).
+Proof.
+(*  induction l.
+  intros; trivial.
+  intros.
+  simpl.
+  assert (sorted le l).
+  eapply sorted_inv; eassumption.
+  case_eq (f a); intros.
+  
+
+  admit.
+  apply IHl.
+  assumption.*)
+Admitted.
+
+Lemma sorted_val_to_spread : forall val, sorted nat_le (val_to_spread val).
+Proof.
+  unfold val_to_spread.
+  intros; apply sorted_filter; reflexivity.
+Qed.
+(*
+Lemma set_val_to_spread: 
   shows "set (val_to_spread val) = {i. i < length lines \<and> val (L i)}"
   unfolding val_to_spread_def
   by auto
@@ -485,11 +542,12 @@ lemma set_val_to_spread_subset [simp]:
   shows "set (val_to_spread val) \<subseteq> {0..<length lines}"
   unfolding val_to_spread_def
   by auto
+*)
+Lemma val_to_spread_spread_to_val: forall eq le s, distinct eq s -> sorted le s -> incl s (upto (length lines)) -> val_to_spread (spread_to_val s) = s.
+Proof.
+Admitted.
 
-lemma val_to_spread_spread_to_val:
-  assumes "distinct s" "sorted s" "set s \<subseteq> {0..<length lines}"
-  shows "val_to_spread (spread_to_val s) = s"
-proof (rule sorted_distinct_set_unique)
+(*proof (rule sorted_distinct_set_unique)
   show "sorted (val_to_spread (spread_to_val s))"
     by simp
 next
@@ -600,12 +658,12 @@ lemma models_spread:
   using assms exactly1_val
   unfolding is_spread satisfies_formula
   by auto
-
-lemma spread_model:
-  assumes "is_spread s"
-  shows "satisfies_formula (spread_to_val s) spreadsSAT"
-  unfolding satisfies_formula
-proof
+*)
+Lemma spread_model: forall s, is_spread s -> satisfies_formula (spread_to_val s) spreadsSAT.
+Proof.
+  unfold satisfies_formula.
+Admitted.
+(*proof
   fix p
   assume p: "p \<in> set all_points"
   show "exactly1_val (spread_to_val s) (map L (point_lines p lines))"
@@ -673,20 +731,24 @@ Definition spreads : list (list nat) :=
            [6; 12; 13; 24; 33];
            [6; 12; 18; 26; 34]])%nat.
 
-(*lemma spreads_is_spread:
-  "\<forall> s \<in> set spreads. is_spread s"
-  unfolding is_spread_def
-  by eval
-*)
+Lemma spreads_is_spread:
+  forall s, In s spreads -> is_spread s.
+Proof.
+  unfold spreads.
+  intros s HIn_S.
+  repeat (destruct HIn_S as [HeqL | HIn_S]; subst; try solve [reflexivity |  elim  (in_nil HIn_S)]).
+Qed.
+
 Definition not_in_spreadsSAT := 
-     map (fun  s => map (fun l => - Z.of_nat (L l)) s) spreads.
+     map (fun  s => map (fun l => - Z.of_nat (L l)) s)%Z spreads.
 
 Eval compute in not_in_spreadsSAT.
 
-(*lemma not_in_spreadsSAT:
-  assumes "\<not> satisfies_formula val not_in_spreadsSAT"
-  shows "val_to_spread val \<in> set spreads"
-proof-
+Lemma not_in_spreadsSAT_characterization :
+  forall val, ~ satisfies_formula val not_in_spreadsSAT -> In (val_to_spread val) spreads.
+Proof.
+Admitted.
+(*proof-
   from assms obtain clause where
      "\<not> satisfies_clause val clause" "clause \<in> set not_in_spreadsSAT"
     unfolding satisfies_formula_def
@@ -724,50 +786,18 @@ proof-
     using \<open>s \<in> set spreads\<close>
     by simp
 qed
-
-lemma not_in_spreadsSAT':
-  assumes "is_spread s" "s \<notin> set spreads"
-  shows "satisfies_formula (spread_to_val s) not_in_spreadsSAT"
-  using assms
-  by (metis is_spread_def not_in_spreadsSAT val_to_spread_spread_to_val)
+*) 
+Lemma not_in_spreadsSAT': forall s, is_spread s -> ~In s spreads -> satisfies_formula (spread_to_val s) not_in_spreadsSAT.
+Proof.
+  intros.
+Admitted.
+(*  unfold not_in_spreadsSAT, satisfies_formula, satisfies_clause, satisfies_lit.
+  intros.
+Check val_to_spread_spread_to_val.
+*)
   
-lemma no_other_spreads_formula:
-  assumes "is_spread s" "s \<notin> set spreads"
-  shows "satisfies_formula (spread_to_val s) (spreadsSAT @ not_in_spreadsSAT)"
-  using assms(1) assms(2) not_in_spreadsSAT' satisfies_formula_def spread_model 
-  by auto
-
-lemma no_other_spreads:
-  shows "\<not> (\<exists> s. is_spread s \<and> s \<notin> set spreads)"
-proof-
-  have "\<not> (\<exists> val. satisfies_formula val (spreadsSAT @ not_in_spreadsSAT))"
-  proof (rule ccontr)
-    assume "\<not> ?thesis"
-    then obtain val where "satisfies_formula val (spreadsSAT @ not_in_spreadsSAT)"
-      by auto
-    then show False
-      by normalization sat
-  qed
-  then show ?thesis
-    using no_other_spreads_formula
-    by blast
-qed
-
-theorem spreads:
-  "is_spread s \<longleftrightarrow> s \<in> set spreads"
-  using no_other_spreads spreads_is_spread 
-  by blast
-
-end
- *)
-
-Definition formula :=app spreadsSAT not_in_spreadsSAT.
-
-Eval compute in formula.
-
-(* Definition example := [[-1];[-2];[1;2]]. *)
-
-From SMTCoq Require Import SMTCoq.
+(*using assms
+  by (metis is_spread_def not_in_spreadsSAT val_to_spread_spread_to_val)*)
 
 Lemma satisfies_formula_app :
   forall val l1 l2, satisfies_formula val (l1++l2) = (satisfies_formula val l1 && satisfies_formula val l2)%bool.
@@ -776,6 +806,16 @@ induction l1.
 reflexivity.  
 intros; simpl; rewrite IHl1.
 intuition.
+Qed.
+
+Lemma no_other_spreads_formula:
+  forall s, is_spread s -> ~In s spreads -> satisfies_formula (spread_to_val s) (spreadsSAT ++ not_in_spreadsSAT).
+  intros.
+  rewrite satisfies_formula_app.
+  apply andb_true_intro; split.
+  apply spread_model.
+  assumption.
+  apply not_in_spreadsSAT'; assumption.
 Qed.
 
 Fixpoint all_true (l:list bool) :=
@@ -794,15 +834,70 @@ rewrite <- IHm.
 apply satisfies_formula_app.
 Qed.
 
-Lemma main_theorem_zchaff : forall val, negb (satisfies_formula val formula)=true.
+Lemma main_theorem_zchaff : forall val, negb (satisfies_formula val (spreadsSAT ++ not_in_spreadsSAT))=true.
 Proof.
-  unfold formula, spreadsSAT, not_in_spreadsSAT, spreads, all_points, exactly1, lines.
+  unfold spreadsSAT, not_in_spreadsSAT, spreads, all_points, exactly1, lines.
   intros; rewrite satisfies_formula_app.
   rewrite satisfies_formula_concat.
-  simpl sort. simpl remdups. unfold point_lines.
-  simpl length. simpl upto. simpl zip. unfold belongs.
+  unfold point_lines, belongs.
+  simpl sort. simpl remdups. simpl length. simpl upto. simpl combine. 
   (*simpl map1.*)
-  simpl. unfold satisfies_lit. simpl.
+ simpl. unfold satisfies_lit. simpl.
   zchaff_no_check.
 Qed.
+
+Lemma negb_lemma : forall x, x=negb x -> False.
+Proof.
+destruct x; simpl; intuition.
+Qed.  
+
+Lemma no_other_spreads: ~(exists s, is_spread s=true /\ ~In s spreads).
+Proof.
+  assert (~ (exists val, satisfies_formula val (spreadsSAT ++ not_in_spreadsSAT))).
+  intro.
+  destruct H.
+  assert (negb (satisfies_formula x (spreadsSAT ++ not_in_spreadsSAT)) = satisfies_formula x (spreadsSAT ++ not_in_spreadsSAT)).
+  rewrite main_theorem_zchaff.
+  rewrite <- H.
+  reflexivity.
+  eapply Bool.no_fixpoint_negb; eassumption.
+
+  intro.
+  apply H.
+  destruct H0.
+  exists (spread_to_val x).
+  apply no_other_spreads_formula; solve [intuition].
+Qed.
+
+Lemma classical_foo : forall P :list nat -> Prop, ~(exists s : list nat, P s) <-> forall s:list nat, ~ P s.
+Proof.
+intros; firstorder.
+Qed.
+
+Lemma in_dec_not_not : forall {A:Set} (x:A) (eq_dec:forall x y:A, {x=y}+{~x=y}) (l:list A), ~~ In x l -> In x l.
+Proof.
+  intros; apply Decidable.not_not.
+  destruct (in_dec eq_dec x l).
+  left; trivial.
+  right; trivial.
+  assumption.
+Qed.
+
+Theorem spreads_characterization : forall s,
+  is_spread s <-> In s spreads.
+Proof.
+  split.
+  intros.
+  generalize no_other_spreads; intros no.
+  rewrite classical_foo in no.
+  generalize (no s); intros.
+  assert (dec:Decidable.decidable (is_spread s = true)).
+  destruct (is_spread s); solve [left;reflexivity | right; intro Hf; inversion Hf].
+  destruct (Decidable.not_and (is_spread s = true) (~ In s spreads) dec H0).
+  solve [intuition]. 
+  apply in_dec_not_not; solve [assumption | apply list_eq_dec; apply eq_nat_dec].
+
+  intros; apply spreads_is_spread; assumption.
+Qed.
+
 
